@@ -1,0 +1,12 @@
+[package]
+name = "skond"
+description = "Skond is a command program for desktop that saves the frames of a screen on a directory."
+repository = "https://github.com/emuvi/skond"
+authors = ["Éverton M. Vieira"]
+license = "LGPL-3.0-only"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "3", features = ["cargo"] }
+scrap = "0.5"
