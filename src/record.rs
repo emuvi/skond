@@ -1,5 +1,7 @@
+use repng;
 use scrap::{Capturer, Display};
 
+use std::fs::File;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -38,6 +40,7 @@ fn record(like: Like) -> std::io::Result<()> {
     .expect(&format!("Display {} not found.", like.display));
 
   let mut capturer = Capturer::new(display).expect("Couldn't get a capturer.");
+  let (w, h) = (capturer.width(), capturer.height());
 
   let like = Arc::new(like);
   let frames_saved = Arc::new(AtomicU64::new(0));
@@ -66,7 +69,7 @@ fn record(like: Like) -> std::io::Result<()> {
           println!("Continued");
         } else if command == "stop" {
           stop.store(true, Ordering::Release);
-          println!("Stopped");
+          println!("Stopping");
           break;
         }
       }
@@ -76,6 +79,9 @@ fn record(like: Like) -> std::io::Result<()> {
   let nanos_time_base = 1_000_000_000 / like.frames_ps;
   let capture_interval = Duration::from_nanos(nanos_time_base);
   let start_time = Instant::now();
+  println!("Started");
+
+  let mut flipped = Vec::with_capacity(w * h * 4);
 
   while !stop.load(Ordering::Acquire) {
     if pause.load(Ordering::Acquire) {
@@ -89,6 +95,21 @@ fn record(like: Like) -> std::io::Result<()> {
     let mut was_block = false;
     match capturer.frame() {
       Ok(frame) => {
+        flipped.clear();
+        let stride = frame.len() / h;
+        for y in 0..h {
+          for x in 0..w {
+            let i = y * stride + 4 * x;
+            flipped.extend_from_slice(&[frame[i + 2], frame[i + 1], frame[i], 255]);
+          }
+        }
+        repng::encode(
+          File::create("test.png").unwrap(),
+          w as u32,
+          h as u32,
+          &flipped,
+        )
+        .unwrap();
         println!("Got frame in {}", start_time.elapsed().as_millis());
         frames_saved.fetch_add(1, Ordering::AcqRel);
       }
@@ -103,10 +124,10 @@ fn record(like: Like) -> std::io::Result<()> {
       let cycle_elapsed = start_cycle.elapsed();
       if cycle_elapsed < capture_interval {
         let sleep_duration = capture_interval - cycle_elapsed;
-        println!("Sleeping for {}", sleep_duration.as_millis());
         std::thread::sleep(sleep_duration);
       }
     }
   }
+  println!("Finished");
   Ok(())
 }
