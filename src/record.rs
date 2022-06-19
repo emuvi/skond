@@ -31,10 +31,13 @@ pub fn start(
 fn record(like: Like) -> std::io::Result<()> {
   let duration = like.duration.map(Duration::from_secs);
 
-  let displays = Display::all()?;
-  let display = displays.into_iter().nth(like.display).unwrap();
+  let displays = Display::all().expect("Couldn't get a list of the displays.");
+  let display = displays
+    .into_iter()
+    .nth(like.display)
+    .expect(&format!("Display {} not found.", like.display));
 
-  let mut capturer = Capturer::new(display)?;
+  let mut capturer = Capturer::new(display).expect("Couldn't get a capturer.");
 
   let like = Arc::new(like);
   let frames_saved = Arc::new(AtomicU64::new(0));
