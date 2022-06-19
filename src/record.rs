@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use repng;
 use scrap::{Capturer, Display};
 
@@ -5,7 +6,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -43,12 +44,14 @@ fn record(like: Like) -> std::io::Result<()> {
   let (w, h) = (capturer.width(), capturer.height());
 
   let like = Arc::new(like);
+  let frames_shots = Arc::new(AtomicU64::new(0));
   let frames_saved = Arc::new(AtomicU64::new(0));
   let pause = Arc::new(AtomicBool::new(false));
   let stop = Arc::new(AtomicBool::new(false));
 
   std::thread::spawn({
     let like = like.clone();
+    let frames_shots = frames_shots.clone();
     let frames_saved = frames_saved.clone();
     let pause = pause.clone();
     let stop = stop.clone();
@@ -59,6 +62,8 @@ fn record(like: Like) -> std::io::Result<()> {
         let command = command.trim();
         if command == "like" {
           println!("{:?}", like);
+        } else if command == "shots" {
+          println!("{}", frames_shots.load(Ordering::Acquire));
         } else if command == "saved" {
           println!("{}", frames_saved.load(Ordering::Acquire));
         } else if command == "pause" {
@@ -81,7 +86,46 @@ fn record(like: Like) -> std::io::Result<()> {
   let start_time = Instant::now();
   println!("Started");
 
-  let mut flipped = Vec::with_capacity(w * h * 4);
+  let to_save_pool: Arc<Mutex<Vec<(DateTime<Local>, Vec<u8>)>>> =
+    Arc::new(Mutex::new(Vec::new()));
+
+  let saving = std::thread::spawn({
+    let to_save_pool = to_save_pool.clone();
+    let stop = stop.clone();
+    let mut flipped = Vec::with_capacity(w * h * 4);
+    move || loop {
+      let (time, frame) = {
+        let mut to_save_pool = to_save_pool.lock().unwrap();
+        if to_save_pool.is_empty() {
+          if stop.load(Ordering::Acquire) {
+            break;
+          }
+          std::thread::sleep(std::time::Duration::from_millis(1));
+          continue;
+        } else {
+          to_save_pool.pop().unwrap()
+        }
+      };
+      flipped.clear();
+      let stride = frame.len() / h;
+      for y in 0..h {
+        for x in 0..w {
+          let i = y * stride + 4 * x;
+          flipped.extend_from_slice(&[frame[i + 2], frame[i + 1], frame[i], 255]);
+        }
+      }
+      let file_name = format!("{}.png", time.format("%Y-%m-%d-%H-%M-%S-%3f"));
+      repng::encode(
+        File::create(file_name).unwrap(),
+        w as u32,
+        h as u32,
+        &flipped,
+      )
+      .unwrap();
+      frames_saved.fetch_add(1, Ordering::AcqRel);
+      println!("Saved: {}", frames_saved.load(Ordering::Acquire));
+    }
+  });
 
   while !stop.load(Ordering::Acquire) {
     if pause.load(Ordering::Acquire) {
@@ -95,23 +139,12 @@ fn record(like: Like) -> std::io::Result<()> {
     let mut was_block = false;
     match capturer.frame() {
       Ok(frame) => {
-        flipped.clear();
-        let stride = frame.len() / h;
-        for y in 0..h {
-          for x in 0..w {
-            let i = y * stride + 4 * x;
-            flipped.extend_from_slice(&[frame[i + 2], frame[i + 1], frame[i], 255]);
-          }
-        }
-        repng::encode(
-          File::create("test.png").unwrap(),
-          w as u32,
-          h as u32,
-          &flipped,
-        )
-        .unwrap();
-        println!("Got frame in {}", start_time.elapsed().as_millis());
-        frames_saved.fetch_add(1, Ordering::AcqRel);
+        let time = Local::now();
+        let to_save = Vec::from(&frame[..]);
+        let mut to_save_pool = to_save_pool.lock().unwrap();
+        to_save_pool.push((time, to_save));
+        frames_shots.fetch_add(1, Ordering::AcqRel);
+        println!("Shots: {}", frames_shots.load(Ordering::Acquire));
       }
       Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
         was_block = true;
@@ -128,6 +161,7 @@ fn record(like: Like) -> std::io::Result<()> {
       }
     }
   }
+  saving.join().unwrap();
   println!("Finished");
   Ok(())
 }
