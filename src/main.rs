@@ -1,7 +1,7 @@
 use scrap::Display;
 
 mod clip;
-mod recorder;
+mod record;
 
 fn main() -> std::io::Result<()> {
   let args = clip::parse();
@@ -24,7 +24,7 @@ fn main() -> std::io::Result<()> {
     let destiny = args
       .value_of("record")
       .expect("Could not parse the record PATH argument.");
-    return recorder::start(display, duration, frames_ps, destiny);
+    return record::start(display, duration, frames_ps, destiny);
   }
   Ok(())
 }
