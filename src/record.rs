@@ -7,6 +7,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -32,6 +33,8 @@ pub fn start(
 }
 
 fn record(like: Like) -> std::io::Result<()> {
+  std::fs::create_dir_all(&like.destiny).expect("Couldn't create the destiny directory.");
+
   let duration = like.duration.map(Duration::from_secs);
 
   let displays = Display::all().expect("Couldn't get a list of the displays.");
@@ -89,43 +92,45 @@ fn record(like: Like) -> std::io::Result<()> {
   let to_save_pool: Arc<Mutex<Vec<(DateTime<Local>, Vec<u8>)>>> =
     Arc::new(Mutex::new(Vec::new()));
 
-  let saving = std::thread::spawn({
-    let to_save_pool = to_save_pool.clone();
-    let stop = stop.clone();
-    let mut flipped = Vec::with_capacity(w * h * 4);
-    move || loop {
-      let (time, frame) = {
-        let mut to_save_pool = to_save_pool.lock().unwrap();
-        if to_save_pool.is_empty() {
-          if stop.load(Ordering::Acquire) {
-            break;
+  let mut saviors: Vec<JoinHandle<()>> = Vec::new();
+  for _ in 0..4 {
+    let saving = std::thread::spawn({
+      let like = like.clone();
+      let to_save_pool = to_save_pool.clone();
+      let frames_saved = frames_saved.clone();
+      let stop = stop.clone();
+      let mut flipped = Vec::with_capacity(w * h * 4);
+      move || loop {
+        let (time, frame) = {
+          let mut to_save_pool = to_save_pool.lock().unwrap();
+          if to_save_pool.is_empty() {
+            if stop.load(Ordering::Acquire) {
+              break;
+            }
+            drop(to_save_pool);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+          } else {
+            to_save_pool.pop().unwrap()
           }
-          std::thread::sleep(std::time::Duration::from_millis(1));
-          continue;
-        } else {
-          to_save_pool.pop().unwrap()
+        };
+        flipped.clear();
+        let stride = frame.len() / h;
+        for y in 0..h {
+          for x in 0..w {
+            let i = y * stride + 4 * x;
+            flipped.extend_from_slice(&[frame[i + 2], frame[i + 1], frame[i], 255]);
+          }
         }
-      };
-      flipped.clear();
-      let stride = frame.len() / h;
-      for y in 0..h {
-        for x in 0..w {
-          let i = y * stride + 4 * x;
-          flipped.extend_from_slice(&[frame[i + 2], frame[i + 1], frame[i], 255]);
-        }
+        let file_name = format!("{}.png", time.format("%Y-%m-%d-%H-%M-%S-%3f"));
+        let destiny = like.destiny.join(&file_name);
+        repng::encode(File::create(destiny).unwrap(), w as u32, h as u32, &flipped).unwrap();
+        frames_saved.fetch_add(1, Ordering::AcqRel);
+        println!("Saved: {}", frames_saved.load(Ordering::Acquire));
       }
-      let file_name = format!("{}.png", time.format("%Y-%m-%d-%H-%M-%S-%3f"));
-      repng::encode(
-        File::create(file_name).unwrap(),
-        w as u32,
-        h as u32,
-        &flipped,
-      )
-      .unwrap();
-      frames_saved.fetch_add(1, Ordering::AcqRel);
-      println!("Saved: {}", frames_saved.load(Ordering::Acquire));
-    }
-  });
+    });
+    saviors.push(saving);
+  }
 
   while !stop.load(Ordering::Acquire) {
     if pause.load(Ordering::Acquire) {
@@ -161,7 +166,9 @@ fn record(like: Like) -> std::io::Result<()> {
       }
     }
   }
-  saving.join().unwrap();
+  for savior in saviors {
+    savior.join().unwrap();
+  }
   println!("Finished");
   Ok(())
 }

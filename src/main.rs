@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
   if let Some(extent_arg) = args.value_of("extent") {
     duration = Some(extent_arg.parse::<u64>().unwrap());
   }
-  let mut frames_ps: u64 = 30;
+  let mut frames_ps: u64 = 3;
   if let Some(frames_ps_arg) = args.value_of("frames_ps") {
     frames_ps = frames_ps_arg.parse::<u64>().unwrap();
   }
